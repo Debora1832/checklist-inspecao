@@ -1,0 +1,503 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Checklist de Inspeção</title>
+  <style>
+    /* estilos mínimos para ficar apresentável */
+    body { font-family: Arial, Helvetica, sans-serif; margin:0; padding:12px; background:#f7f7f8; color:#111 }
+    .container { max-width:1100px; margin:0 auto; }
+    header { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+    h1 { margin:0; font-size:20px }
+    input, select, textarea { font-family:inherit }
+    .btn { padding:8px 12px; border-radius:6px; cursor:pointer; }
+    .green { background:#16a34a; color:#fff; border:none }
+    .blue { background:#0b61d6; color:#fff; border:none }
+    .card { background:#fff; border:1px solid #e5e7eb; padding:12px; border-radius:8px }
+    .muted { color:#666; font-size:13px }
+    .small { font-size:13px }
+    .danger { color:#c0392b }
+    .flex { display:flex; gap:8px; align-items:center }
+    img.ref { width:120px; height:72px; object-fit:cover; border-radius:6px; border:1px solid #ddd }
+    .grid { display:grid; gap:12px }
+    @media (min-width:800px){ .two { grid-template-columns: 2fr 1fr; } .cols-2 { grid-template-columns:1fr 1fr } }
+  </style>
+</head>
+<body>
+<div class="container" id="root"></div>
+
+<!-- React + ReactDOM (UMD) e Babel para JSX no browser -->
+<script src="https://unpkg.com/react@17/umd/react.development.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@17/umd/react-dom.development.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel">
+const { useState, useEffect } = React;
+
+/* App principal (versão client-side, sem backend) */
+function App(){
+  // peças iniciais
+  const initialParts = [
+    { code: "597-2445#01", desc: "Longarina" },
+    { code: "597-2435#01", desc: "Longarina" },
+    { code: "600-6527#01", desc: "Longarina" },
+    { code: "600-6526#01", desc: "Longarina" },
+    { code: "618-6155#01", desc: "Longarina" },
+    { code: "618-6156#01", desc: "Longarina" }
+  ];
+
+  const initialPerPart = {
+    "597-2445#01": {
+      items:[
+        { id:'d1', label:'Dimensão A (Ø)', requiredIfNotOk:true },
+        { id:'d2', label:'Furo B posição', requiredIfNotOk:true },
+        { id:'s1', label:'Solda - qualidade', requiredIfNotOk:true }
+      ],
+      refs:[ { id:1, title:'597-2445 - Referência', src:'https://via.placeholder.com/320?text=597-2445+OK' } ]
+    },
+    "597-2435#01": {
+      items:[ { id:'d1', label:'Dimensão C (comprimento)', requiredIfNotOk:true }, { id:'p1', label:'Pintura - aderência', requiredIfNotOk:true } ],
+      refs:[ { id:1, title:'597-2435 - Referência', src:'https://via.placeholder.com/320?text=597-2435+OK' } ]
+    }
+  };
+
+  // estados
+  const [mode, setMode] = useState('inspecao'); // 'inspecao' | 'gerenciar'
+  const [partsList, setPartsList] = useState( JSON.parse(localStorage.getItem('partsList')) || initialParts );
+  const [perPartChecklists, setPerPartChecklists] = useState( JSON.parse(localStorage.getItem('perPartChecklists')) || initialPerPart );
+  const [inspector, setInspector] = useState('');
+  const [selectedPart, setSelectedPart] = useState(partsList[0]?.code || '');
+  const [items, setItems] = useState(buildChecklistForPart(partsList[0]?.code || ''));
+  const [inspections, setInspections] = useState( JSON.parse(localStorage.getItem('inspections')) || [] );
+  const [showLibrary, setShowLibrary] = useState(false);
+  const [libQuery, setLibQuery] = useState('');
+  const [saveDecision, setSaveDecision] = useState('');
+  const [approverName, setApproverName] = useState('');
+  const [validationErrors, setValidationErrors] = useState({ decision:'', approver:'' });
+
+  // helper id
+  const newId = ()=> Math.floor(Math.random()*1e9);
+
+  // salva localmente mudanças importantes
+  useEffect(()=> localStorage.setItem('partsList', JSON.stringify(partsList)), [partsList]);
+  useEffect(()=> localStorage.setItem('perPartChecklists', JSON.stringify(perPartChecklists)), [perPartChecklists]);
+  useEffect(()=> localStorage.setItem('inspections', JSON.stringify(inspections)), [inspections]);
+
+  // constrói checklist para uma peça
+  function buildChecklistForPart(code){
+    const cfg = perPartChecklists[code];
+    if(cfg) return cfg.items.map(it=>({ ...it, result:null, note:'', photos:[] }));
+    return [
+      { id:'c_dim', label:'Dimensional - diâmetro', result:null, note:'', photos:[] },
+      { id:'c_acab', label:'Acabamento - pintura', result:null, note:'', photos:[] },
+      { id:'c_mont', label:'Montabilidade - pino', result:null, note:'', photos:[] }
+    ];
+  }
+
+  // quando troca peça
+  function onPartChange(code){
+    setSelectedPart(code);
+    setItems(buildChecklistForPart(code));
+  }
+
+  // toggle resultado
+  function toggleResult(itemId, value){
+    setItems(curr => curr.map(it=> it.id===itemId ? {...it, result:value} : it ));
+  }
+  function setNote(itemId, text){
+    setItems(curr => curr.map(it=> it.id===itemId ? {...it, note:text} : it ));
+  }
+  function handleFilesSelected(itemId, files){
+    if(!files) return;
+    const arr = Array.from(files);
+    const readers = arr.map(file=> new Promise(resolve=>{
+      const reader = new FileReader();
+      reader.onload = e => resolve({ id: newId(), src: e.target.result, name: file.name});
+      reader.readAsDataURL(file);
+    }));
+    Promise.all(readers).then(images => {
+      setItems(curr => curr.map(it => it.id===itemId ? {...it, photos:[...(it.photos||[]), ...images]} : it));
+    });
+  }
+  function removePhoto(itemId, photoId){
+    setItems(curr => curr.map(it=> it.id===itemId ? {...it, photos: it.photos.filter(p=>p.id!==photoId)} : it ));
+  }
+
+  function addItem(label){
+    const id = `user_${newId()}`;
+    setItems(curr=> [...curr, { id, label: label || `Item ${curr.length+1}`, result:null, note:'', photos:[] }]);
+  }
+  function removeItem(itemId){
+    setItems(curr => curr.filter(it => it.id !== itemId));
+  }
+
+  const hasFailing = items.some(it => it.result === false);
+
+  // valida e salva inspeção
+  function validateAndSaveInspection(){
+    setValidationErrors({ decision:'', approver:'' });
+    const failing = items.filter(it => it.result === false && (!it.note || it.note.trim()===''));
+    if(failing.length){
+      if(!saveDecision){
+        setValidationErrors({ decision:'Escolha encaminhamento (retrabalho ou aprovado por terceiro).', approver:'' });
+        return;
+      }
+      if(saveDecision==='approved_third' && (!approverName || approverName.trim()==='')){
+        setValidationErrors({ decision:'', approver:'Nome do aprovador obrigatório.' });
+        return;
+      }
+    }
+    const payload = {
+      id:`insp_${Date.now()}`,
+      inspector,
+      part:selectedPart,
+      partDesc: partsList.find(p=>p.code===selectedPart)?.desc || '',
+      date: new Date().toISOString(),
+      items,
+      decision: failing.length ? (saveDecision || 'rework') : 'ok',
+      approverName: saveDecision==='approved_third' ? approverName : ''
+    };
+    setInspections(curr => [payload, ...curr]);
+    setItems(buildChecklistForPart(selectedPart));
+    setSaveDecision('');
+    setApproverName('');
+    alert('Inspeção salva localmente.');
+  }
+
+  // export CSV (todas)
+  function exportCSV(){
+    if(inspections.length===0){ alert('Nenhuma inspeção para exportar.'); return; }
+    const lines = ['inspection_id;inspector;part;part_desc;date;item_label;result;note;photo_count;decision;approver'];
+    inspections.forEach(insp=>{
+      insp.items.forEach(it=>{
+        lines.push([insp.id, insp.inspector||'', insp.part, insp.partDesc, insp.date, it.label, it.result===true?'OK':it.result===false?'NÃO OK':'N/A', `"${it.note||''}"`, it.photos?.length||0, insp.decision||'', insp.approverName||''].join(';'));
+      });
+    });
+    const blob = new Blob([lines.join("\n")], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href=url; a.download = `inspections_${new Date().toISOString()}.csv`; a.click(); URL.revokeObjectURL(url);
+  }
+
+  // export history Excel (tabs)
+  function exportHistoryExcel(){
+    if(inspections.length===0){ alert('Nenhuma inspeção para exportar.'); return; }
+    const lines = ['inspection_id\tinspector\tpart\tpart_desc\tdate\titem_label\tresult\tnote\tphoto_count\tdecision\tapprover'];
+    inspections.forEach(insp=>{
+      insp.items.forEach(it=>{
+        lines.push([insp.id, insp.inspector||'', insp.part, insp.partDesc, insp.date, it.label, it.result===true?'OK':it.result===false?'NÃO OK':'N/A', it.note||'', it.photos?.length||0, insp.decision||'', insp.approverName||''].join('\t'));
+      });
+    });
+    const blob = new Blob([lines.join("\n")], { type: 'application/vnd.ms-excel' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href=url; a.download = `inspections_history_${new Date().toISOString()}.xls`; a.click(); URL.revokeObjectURL(url);
+  }
+
+  // abrir inspeção modal (simples)
+  const [openInspectionId, setOpenInspectionId] = useState(null);
+  const selectedInspection = inspections.find(i => i.id===openInspectionId) || null;
+  function openInspection(id){ setOpenInspectionId(id); }
+  function closeInspection(){ setOpenInspectionId(null); }
+
+  // admin: add part
+  function addPart(code, desc){
+    if(!code||!desc){ alert('Código e descrição obrigatórios'); return; }
+    if(partsList.some(p=>p.code===code)){ alert('Peça já existe'); return; }
+    const next = [...partsList, { code, desc }];
+    setPartsList(next);
+    setPerPartChecklists(prev => ({ ...prev, [code]: { items: [], refs: [] } }));
+  }
+  // admin add checklist item
+  function adminAddChecklistItem(code, label){
+    if(!code||!label){ alert('Peça e item obrigatórios'); return; }
+    setPerPartChecklists(prev=>{
+      const p = prev[code] || { items:[], refs:[] };
+      const newItem = { id:`a_${newId()}`, label, requiredIfNotOk:true };
+      return { ...prev, [code]: { ...p, items: [...(p.items||[]), newItem], refs: p.refs || [] } };
+    });
+  }
+  function adminAddRefImage(code, title, src){
+    if(!code || !src){ alert('Peça e URL obrigatórios'); return; }
+    setPerPartChecklists(prev=>{
+      const p = prev[code] || { items:[], refs:[] };
+      const ref = { id:`r_${newId()}`, title: title||'Referência', src };
+      return { ...prev, [code]: { ...p, items: p.items||[], refs: [...(p.refs||[]), ref] } };
+    });
+  }
+
+  // small library (exemplo)
+  const library = [
+    { id:'lib1', title:'Descoloração', description:'Exemplo de descoloração aceitável vs. não aceito.', image:'https://via.placeholder.com/320?text=Descoloração' },
+    { id:'lib2', title:'Furo fora de posição', description:'Critério: tolerância ±0.3 mm.', image:'https://via.placeholder.com/320?text=Furo' }
+  ];
+  const filteredLibrary = library.filter(l => l.title.toLowerCase().includes(libQuery.toLowerCase()) || l.description.toLowerCase().includes(libQuery.toLowerCase()));
+
+  // UI
+  return (
+    <div>
+      <header style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+        <div>
+          <h1>Checklist de Inspeção Final</h1>
+          <div className="muted">Modo: {mode==='inspecao'?'Inspeção':'Gerenciar peças'}</div>
+        </div>
+        <div style={{display:'flex',gap:10,alignItems:'center'}}>
+          <div>
+            <div style={{fontSize:12}}>Inspetor</div>
+            <input value={inspector} onChange={e=>setInspector(e.target.value)} placeholder="Nome do inspetor" style={{padding:8,borderRadius:6,border:'1px solid #ccc'}}/>
+          </div>
+          <div style={{textAlign:'right'}}>
+            <div className="small muted">Peça atual</div>
+            <div style={{fontWeight:600}}>{selectedPart} — {partsList.find(p=>p.code===selectedPart)?.desc}</div>
+          </div>
+          <div>
+            <button className="btn" onClick={()=> setMode(mode==='inspecao'?'gerenciar':'inspecao') }>{mode==='inspecao'?'Ir para Gerenciar':'Voltar à Inspeção'}</button>
+          </div>
+        </div>
+      </header>
+
+      {mode==='gerenciar' ? (
+        <section className="grid cols-2" style={{display:'grid', gap:12}}>
+          <div className="card">
+            <h4>Adicionar nova peça</h4>
+            <AddPartForm onAdd={addPart} />
+            <h4 style={{marginTop:12}}>Peças existentes</h4>
+            <ul>
+              {partsList.map(p=> <li key={p.code}>{p.code} — {p.desc}</li>)}
+            </ul>
+          </div>
+          <div className="card">
+            <h4>Editar checklist de uma peça</h4>
+            <EditChecklistPanel partsList={partsList} perPartChecklists={perPartChecklists} onAddItem={adminAddChecklistItem} onAddRef={adminAddRefImage}/>
+          </div>
+        </section>
+      ) : (
+        <>
+          <section className="two" style={{display:'grid', gridTemplateColumns:'2fr 1fr', gap:12}}>
+            <div className="card">
+              <label>Selecionar peça (modelo)</label>
+              <select value={selectedPart} onChange={e=>onPartChange(e.target.value)} style={{width:'100%',padding:8,borderRadius:6,border:'1px solid #ccc',marginTop:8}}>
+                {partsList.map(p=> <option key={p.code} value={p.code}>{p.code} — {p.desc}</option>)}
+              </select>
+
+              <div style={{marginTop:12}}>
+                <h3>Imagens de referência (peça boa)</h3>
+                <div style={{display:'flex',gap:8,marginTop:8}}>
+                  {(perPartChecklists[selectedPart]?.refs || [{id:'g1',title:'Referência genérica',src:'https://via.placeholder.com/320?text=Referência+OK'}]).map(img=>(
+                    <div key={img.id} style={{width:140}}><img className="ref" src={img.src} alt={img.title}/><div className="small">{img.title}</div></div>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{marginTop:12}}>
+                <button className="btn blue" onClick={()=>setShowLibrary(true)}>Biblioteca de casos</button>
+                <button className="btn" style={{marginLeft:8}} onClick={()=>{ navigator.clipboard && navigator.clipboard.writeText(JSON.stringify(items,null,2)); alert('Checklist copiado (JSON)'); }}>Copiar checklist</button>
+              </div>
+            </div>
+
+            <aside className="card">
+              <h4>Ações</h4>
+              <div style={{marginTop:8}}>
+                {hasFailing && (
+                  <div style={{marginBottom:12}}>
+                    <div style={{fontWeight:600}}>Existem itens NÃO OK — escolha encaminhamento</div>
+                    <div style={{marginTop:8}}>
+                      <label style={{display:'flex',alignItems:'center',gap:8}}><input type="radio" name="decision" checked={saveDecision==='rework'} onChange={()=>setSaveDecision('rework')} /> Encaminhar para retrabalho</label>
+                      <label style={{display:'flex',alignItems:'center',gap:8,marginTop:6}}><input type="radio" name="decision" checked={saveDecision==='approved_third'} onChange={()=>setSaveDecision('approved_third')} /> Aprovado por terceiro</label>
+                    </div>
+                    {validationErrors.decision && <div className="danger" style={{marginTop:8}}>{validationErrors.decision}</div>}
+                    {saveDecision==='approved_third' && (<div style={{marginTop:8}}><input value={approverName} onChange={e=>setApproverName(e.target.value)} placeholder="Nome da pessoa aprovadora" style={{width:'100%',padding:8,borderRadius:6,border:'1px solid #ccc'}}/> {validationErrors.approver && <div className="danger" style={{marginTop:6}}>{validationErrors.approver}</div>}</div>)}
+                  </div>
+                )}
+                <button className="btn green" onClick={validateAndSaveInspection} style={{width:'100%',marginBottom:8}}>Salvar inspeção</button>
+                <button className="btn" onClick={exportCSV} style={{width:'100%',marginBottom:8}}>Exportar CSV</button>
+                <button className="btn" onClick={exportHistoryExcel} style={{width:'100%'}}>Baixar histórico (Excel)</button>
+                <div className="muted small" style={{marginTop:8}}>Sugestão: integrar com endpoint POST /api/inspections para salvar automaticamente.</div>
+              </div>
+            </aside>
+          </section>
+
+          <section style={{marginTop:18}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <h3>Itens de verificação</h3>
+              <div><button className="btn" onClick={()=>addItem('Novo item')}>Adicionar item</button></div>
+            </div>
+            <div style={{marginTop:12}} className="grid">
+              {items.map(it=>(
+                <div key={it.id} className="card">
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'start'}}>
+                    <div>
+                      <div style={{fontWeight:600}}>{it.label}</div>
+                      <div className="muted small">ID: {it.id}</div>
+                    </div>
+                    <div style={{display:'flex',gap:8}}>
+                      <button onClick={()=>toggleResult(it.id,true)} style={{padding:'6px 10px',borderRadius:6,border:'1px solid #16a34a',background:it.result===true?'#16a34a':'#fff',color:it.result===true?'#fff':'#16a34a'}}>OK</button>
+                      <button onClick={()=>toggleResult(it.id,false)} style={{padding:'6px 10px',borderRadius:6,border:'1px solid #c0392b',background:it.result===false?'#c0392b':'#fff',color:it.result===false?'#fff':'#c0392b'}}>NÃO OK</button>
+                      <button onClick={()=>toggleResult(it.id,null)} style={{padding:'6px 10px',borderRadius:6,border:'1px solid #ccc'}}>LIMPAR</button>
+                    </div>
+                  </div>
+
+                  {it.result===false && (
+                    <div style={{marginTop:10}}>
+                      <label className="small">Descrição da não conformidade (obrigatório)</label>
+                      <textarea value={it.note} onChange={e=>setNote(it.id,e.target.value)} rows={3} style={{width:'100%',padding:8,borderRadius:6,border:'1px solid #ccc',marginTop:6}}/>
+                    </div>
+                  )}
+
+                  <div style={{marginTop:10}}>
+                    <label className="small">Fotos / evidências</label>
+                    <input type="file" accept="image/*" multiple onChange={(e)=>handleFilesSelected(it.id,e.target.files)} style={{marginTop:6}}/>
+                    <div style={{display:'flex',gap:8,marginTop:8,overflowX:'auto'}}>
+                      {(it.photos||[]).map(p=>(
+                        <div key={p.id} style={{position:'relative'}}>
+                          <img src={p.src} alt={p.name} style={{width:96,height:96,objectFit:'cover',borderRadius:6,border:'1px solid #ddd'}}/>
+                          <button onClick={()=>removePhoto(it.id,p.id)} style={{position:'absolute',top:6,right:6,background:'#fff',border:'1px solid #ccc',borderRadius:12,padding:'2px 6px'}}>x</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div style={{marginTop:10,textAlign:'right'}}><button onClick={()=>removeItem(it.id)} className="btn">Remover item</button></div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section style={{marginTop:20}}>
+            <h3>Inspeções salvas</h3>
+            <div style={{marginTop:8}}>
+              {inspections.length===0 && <div className="muted">Nenhuma inspeção salva.</div>}
+              {inspections.map(insp=>(
+                <div key={insp.id} className="card" style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                  <div>
+                    <div style={{fontWeight:600}}>{insp.part} — {insp.partDesc}</div>
+                    <div className="muted small">{new Date(insp.date).toLocaleString()} • Inspetor: {insp.inspector||'—'}</div>
+                  </div>
+                  <div>
+                    <button onClick={()=>openInspection(insp.id)} style={{marginRight:8}} className="btn">Abrir</button>
+                    <button onClick={()=>{navigator.clipboard&&navigator.clipboard.writeText(JSON.stringify(insp,null,2)); alert('Inspeção copiada');}} style={{marginRight:8}} className="btn">Copiar</button>
+                    <button onClick={()=>setInspections(curr=>curr.filter(i=>i.id!==insp.id))} className="btn">Remover</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        </>
+      )}
+
+      {showLibrary && (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:80}}>
+          <div style={{background:'#fff',width:'90%',maxWidth:800,padding:16,borderRadius:8}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+              <h3>Biblioteca de Casos</h3>
+              <div style={{display:'flex',gap:8}}>
+                <input placeholder="Buscar..." value={libQuery} onChange={e=>setLibQuery(e.target.value)} style={{padding:8,border:'1px solid #ccc',borderRadius:6}}/>
+                <button onClick={()=>setShowLibrary(false)} className="btn">Fechar</button>
+              </div>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+              {filteredLibrary.map(l=>(
+                <div key={l.id} className="card">
+                  <img src={l.image} style={{width:'100%',borderRadius:6}}/>
+                  <div style={{fontWeight:600,marginTop:8}}>{l.title}</div>
+                  <div className="muted">{l.description}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedInspection && (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:90}}>
+          <div style={{background:'#fff',width:'90%',maxWidth:800,padding:16,borderRadius:8,maxHeight:'90vh',overflow:'auto'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+              <div>
+                <h3 style={{margin:0}}>Inspeção: {selectedInspection.id}</h3>
+                <div className="muted">{selectedInspection.part} — {selectedInspection.partDesc}</div>
+                <div className="muted small">{new Date(selectedInspection.date).toLocaleString()} • Inspetor: {selectedInspection.inspector||'—'}</div>
+              </div>
+              <div><button onClick={closeInspection} className="btn">Fechar</button></div>
+            </div>
+            <div style={{display:'grid',gap:12}}>
+              {selectedInspection.items.map(it=>(
+                <div key={it.id} className="card">
+                  <div style={{fontWeight:600}}>{it.label} — {it.result===true?'OK':it.result===false?'NÃO OK':'N/A'}</div>
+                  {it.note && <div className="muted" style={{marginTop:6}}>Obs: {it.note}</div>}
+                  {it.photos?.length>0 && (
+                    <div style={{display:'flex',gap:8,marginTop:8,overflowX:'auto'}}>{it.photos.map(p=> <img key={p.id} src={p.src} style={{width:96,height:96,objectFit:'cover',borderRadius:6}}/> )}</div>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div style={{marginTop:12,display:'flex',gap:8}}>
+              <button onClick={()=>{navigator.clipboard&&navigator.clipboard.writeText(JSON.stringify(selectedInspection,null,2)); alert('copiado')}} className="btn">Copiar JSON</button>
+              <button onClick={()=>{ exportSingleInspectionCSV(selectedInspection); }} className="btn">Baixar (CSV)</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+}
+
+/* export single inspection CSV */
+function exportSingleInspectionCSV(insp){
+  const lines = ['inspection_id;inspector;part;part_desc;date;item_label;result;note;photo_count'];
+  insp.items.forEach(it=>{
+    lines.push([insp.id, insp.inspector||'', insp.part, insp.partDesc, insp.date, it.label, it.result===true?'OK':it.result===false?'NÃO OK':'N/A', `"${it.note||''}"`, it.photos?.length||0].join(';'));
+  });
+  const blob = new Blob([lines.join("\n")], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download = `${insp.id}.csv`; a.click(); URL.revokeObjectURL(url);
+}
+
+/* AddPartForm component */
+function AddPartForm({ onAdd }){
+  const [code, setCode] = React.useState('');
+  const [desc, setDesc] = React.useState('');
+  return (
+    <div>
+      <input placeholder="Código (ex: 123-4567#01)" value={code} onChange={e=>setCode(e.target.value)} style={{width:'100%',padding:8,borderRadius:6,border:'1px solid #ccc',marginBottom:8}}/>
+      <input placeholder="Descrição (ex: Longarina)" value={desc} onChange={e=>setDesc(e.target.value)} style={{width:'100%',padding:8,borderRadius:6,border:'1px solid #ccc',marginBottom:8}}/>
+      <button onClick={()=>{ onAdd(code.trim(), desc.trim()); setCode(''); setDesc(''); }} className="btn green">Adicionar peça</button>
+    </div>
+  );
+}
+
+/* EditChecklistPanel component */
+function EditChecklistPanel({ partsList, perPartChecklists, onAddItem, onAddRef }){
+  const [selected, setSelected] = React.useState(partsList[0]?.code || '');
+  const [newItem, setNewItem] = React.useState('');
+  const [refTitle, setRefTitle] = React.useState('');
+  const [refUrl, setRefUrl] = React.useState('');
+  return (
+    <div>
+      <label style={{display:'block',fontSize:13}}>Selecionar peça</label>
+      <select value={selected} onChange={e=>setSelected(e.target.value)} style={{width:'100%',padding:8,borderRadius:6,border:'1px solid #ccc',marginBottom:8}}>
+        {partsList.map(p => <option key={p.code} value={p.code}>{p.code} — {p.desc}</option>)}
+      </select>
+      <div style={{marginBottom:8}}>
+        <h5 style={{margin:0}}>Itens atuais</h5>
+        <ul>{(perPartChecklists[selected]?.items || []).map(it => <li key={it.id}>{it.label}</li>)}</ul>
+      </div>
+      <div style={{marginBottom:8}}>
+        <input placeholder="Novo item (ex: Dimensão X)" value={newItem} onChange={e=>setNewItem(e.target.value)} style={{width:'100%',padding:8,borderRadius:6,border:'1px solid #ccc',marginBottom:8}}/>
+        <button onClick={()=>{ onAddItem(selected, newItem.trim()); setNewItem(''); }} className="btn">Adicionar item</button>
+      </div>
+      <div>
+        <h5 style={{margin:0}}>Imagens de referência</h5>
+        <div style={{marginBottom:8}}>{(perPartChecklists[selected]?.refs || []).map(r => <div key={r.id} style={{fontSize:13}}>{r.title} — <a href={r.src} target="_blank" rel="noreferrer">abrir</a></div>)}</div>
+        <input placeholder="Título da imagem" value={refTitle} onChange={e=>setRefTitle(e.target.value)} style={{width:'100%',padding:8,borderRadius:6,border:'1px solid #ccc',marginBottom:8}}/>
+        <input placeholder="URL da imagem" value={refUrl} onChange={e=>setRefUrl(e.target.value)} style={{width:'100%',padding:8,borderRadius:6,border:'1px solid #ccc',marginBottom:8}}/>
+        <button onClick={()=>{ onAddRef(selected, refTitle.trim(), refUrl.trim()); setRefTitle(''); setRefUrl(''); }} className="btn">Adicionar referência</button>
+      </div>
+    </div>
+  );
+}
+
+/* render */
+ReactDOM.render(<App />, document.getElementById('root'));
+</script>
+</body>
+</html>
